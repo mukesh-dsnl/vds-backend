@@ -63,6 +63,8 @@ def schedule_live_cache_refresh(interval_seconds: int = 5):
 
     def _run():
         try:
+            from app.services.campaign_service import archive_completed_campaigns
+            archive_completed_campaigns()
             refresh_live_cache()
             logger.debug("Live cache refreshed")
         except Exception:

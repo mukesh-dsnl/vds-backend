@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.storage import ensure_storage_initialized
 from app.api.auth_routes import router as auth_router
 from app.api.campaign_routes import router as campaign_router
+from app.api.campaigns_routes import router as campaigns_router
 from app.api.dashboard_routes import router as dashboard_router
 from app.jobs.scheduler import start_scheduler, shutdown_scheduler
 
@@ -62,6 +63,7 @@ app.add_middleware(
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(campaign_router)
+app.include_router(campaigns_router)
 app.include_router(dashboard_router)
 
 

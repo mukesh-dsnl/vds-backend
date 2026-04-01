@@ -166,3 +166,17 @@ class CampaignResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CampaignSummaryResponse(BaseModel):
+    """Lightweight campaign response without config details."""
+
+    id: str
+    name: str
+    start_time: datetime
+    end_time: datetime
+    target_total: int
+    status: str
+
+    class Config:
+        from_attributes = True

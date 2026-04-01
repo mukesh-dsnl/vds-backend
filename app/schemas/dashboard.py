@@ -11,6 +11,22 @@ class LiveStatsResponse(BaseModel):
     total_uploads: int
     connected: int
     not_connected: int
+    percentage: float = 0.0
+    status: str = ""
+
+    class Config:
+        from_attributes = True
+
+
+class CampaignSummaryResponse(BaseModel):
+    """Lightweight campaign info response without config details."""
+
+    id: str
+    name: str
+    start_time: datetime
+    end_time: datetime
+    target_total: int
+    status: str
 
     class Config:
         from_attributes = True

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -6,13 +7,18 @@ from fastapi import HTTPException
 
 from app.core.config import get_settings
 from app.core.storage import (
+    archive_campaign,
     campaign_timeseries_exists,
+    campaign_time_bounds,
     get_campaign as storage_get_campaign,
+    list_campaign_ids as storage_list_campaign_ids,
     list_campaigns as storage_list_campaigns,
     save_campaign,
 )
 from app.models.campaign import CampaignStatus
 from app.schemas.campaign import CampaignCreate, CampaignUpdate
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "connected_ratio": 0.6,
@@ -169,3 +175,38 @@ def update_campaign(campaign_id: str | int, data: CampaignUpdate) -> dict[str, A
 
     save_campaign(campaign)
     return campaign
+
+
+def campaign_to_summary(campaign: dict[str, Any]) -> dict[str, Any]:
+    """Return a minimal campaign dict (no config) with computed status."""
+    return {
+        "id": str(campaign.get("id", "")),
+        "name": str(campaign.get("name", "")),
+        "start_time": campaign.get("start_time"),
+        "end_time": campaign.get("end_time"),
+        "target_total": int(campaign.get("target_total", 0)),
+        "status": get_runtime_status_label(campaign),
+    }
+
+
+def archive_completed_campaigns(now: datetime | None = None) -> list[str]:
+    """Check all active campaigns and archive any whose end_time has passed."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    archived: list[str] = []
+    for campaign_id in storage_list_campaign_ids():
+        campaign = storage_get_campaign(campaign_id)
+        if not campaign:
+            continue
+        try:
+            _, end = campaign_time_bounds(campaign)
+            if now >= end:
+                success = archive_campaign(campaign_id)
+                if success:
+                    archived.append(campaign_id)
+                    logger.info("Archived completed campaign: %s", campaign_id)
+        except Exception:
+            logger.exception("Failed to check/archive campaign %s", campaign_id)
+
+    return archived

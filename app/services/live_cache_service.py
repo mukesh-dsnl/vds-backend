@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from threading import RLock
 from typing import Deque
 
-from app.core.storage import latest_timeseries_window
+from app.core.storage import get_completed_campaigns, is_campaign_active, latest_timeseries_window
 from app.services import campaign_service
 
 _CACHE_LIMIT = 10
@@ -64,6 +64,11 @@ def refresh_live_cache(now: datetime | None = None) -> None:
     with _cache_lock:
         for campaign in campaigns:
             campaign_id = str(campaign["id"])
+
+            # Skip archived campaigns — their data is served from campaigns.json
+            if not is_campaign_active(campaign_id):
+                continue
+
             rows = latest_timeseries_window(campaign_id, now, _CACHE_LIMIT)
             if rows:
                 snapshots = [_row_to_snapshot(campaign_id, row) for row in rows]
@@ -73,7 +78,40 @@ def refresh_live_cache(now: datetime | None = None) -> None:
         _last_refresh = now
 
 
+def _completed_snapshot(campaign_id: str) -> dict[str, object] | None:
+    """Return snapshot from campaigns.json for an archived campaign, or None."""
+    completed = get_completed_campaigns()
+    entry = completed.get(campaign_id)
+    if not entry or not isinstance(entry, dict):
+        return None
+    snap = entry.get("snapshot")
+    if not snap or not isinstance(snap, dict):
+        return None
+    ts = snap.get("timestamp", datetime.now(timezone.utc))
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts)
+        except ValueError:
+            ts = datetime.now(timezone.utc)
+    if isinstance(ts, datetime) and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return {
+        "campaign_id": campaign_id,
+        "timestamp": ts,
+        "total_uploads": int(snap.get("total_uploads", 0)),
+        "connected": int(snap.get("connected", 0)),
+        "not_connected": int(snap.get("not_connected", 0)),
+    }
+
+
 def get_live_snapshot(campaign_id: str) -> dict[str, object]:
+    # Archived campaign — serve from campaigns.json
+    if not is_campaign_active(campaign_id):
+        snap = _completed_snapshot(campaign_id)
+        if snap:
+            return snap
+        return _build_snapshot(campaign_id, datetime.now(timezone.utc), 0, 0)
+
     now = datetime.now(timezone.utc)
 
     with _cache_lock:
@@ -100,6 +138,13 @@ def get_all_live_snapshots() -> list[dict[str, object]]:
     with _cache_lock:
         for idx, campaign in enumerate(campaigns):
             campaign_id = str(campaign["id"])
+
+            # Archived campaign — use final snapshot from campaigns.json
+            if not is_campaign_active(campaign_id):
+                snap = _completed_snapshot(campaign_id)
+                snapshots[idx] = snap if snap else _build_snapshot(campaign_id, now, 0, 0)
+                continue
+
             rows = _cache.get(campaign_id)
             if rows:
                 latest = _select_latest_snapshot(rows, now)

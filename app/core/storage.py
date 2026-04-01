@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import re
+import shutil
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +26,8 @@ except Exception:
     _default_tz = timezone.utc
 _storage_root = Path(getattr(_settings, "STORAGE_DIR", "storage")).resolve()
 _campaigns_root = _storage_root / "campaigns"
+_past_campaigns_root = _storage_root / "past_campaigns"
+_completed_campaigns_file = _storage_root / "campaigns.json"
 _admin_file = _storage_root / "admin.json"
 _clients_file = _storage_root / "clients.json"
 _io_lock = RLock()
@@ -105,6 +108,9 @@ def _seed_test_campaign() -> None:
     if list_campaign_ids():
         return
 
+    if _read_json(_completed_campaigns_file, {}):
+        return
+
     now = datetime.now(timezone.utc)
     start = (now - timedelta(minutes=10)).replace(microsecond=0)
     end = (now + timedelta(minutes=50)).replace(microsecond=0)
@@ -144,6 +150,7 @@ def _seed_test_campaign() -> None:
 def ensure_storage_initialized() -> None:
     with _io_lock:
         _campaigns_root.mkdir(parents=True, exist_ok=True)
+        _past_campaigns_root.mkdir(parents=True, exist_ok=True)
         _migrate_legacy_campaign_files()
 
         if not _admin_file.exists():
@@ -191,24 +198,48 @@ def list_campaign_ids() -> list[str]:
 
 def list_campaigns() -> list[dict[str, Any]]:
     campaigns: list[dict[str, Any]] = []
+    active_ids: set[str] = set()
+
     for campaign_id in list_campaign_ids():
         campaign = get_campaign(campaign_id)
         if campaign:
             campaigns.append(campaign)
+            active_ids.add(campaign_id)
+
+    # Include completed/archived campaigns not already in active
+    for cid, entry in get_completed_campaigns().items():
+        if cid not in active_ids and isinstance(entry, dict):
+            campaigns.append(entry)
+
     campaigns.sort(key=lambda item: str(item.get("id", "")).lower(), reverse=True)
     return campaigns
 
 
 def get_campaign(campaign_id: str | int) -> dict[str, Any] | None:
+    # Check active campaigns folder first
     meta_path = _campaign_meta_path(campaign_id)
-    if not meta_path.exists():
-        return None
-    raw = _read_json(meta_path, {})
-    if not raw:
-        return None
-    if "id" in raw:
-        raw["id"] = str(raw["id"])
-    return raw
+    if meta_path.exists():
+        raw = _read_json(meta_path, {})
+        if raw:
+            if "id" in raw:
+                raw["id"] = str(raw["id"])
+            return raw
+
+    # Fall back to completed campaigns registry
+    normalized_id = _normalize_campaign_id(campaign_id)
+    completed = get_completed_campaigns()
+    entry = completed.get(normalized_id)
+    if entry and isinstance(entry, dict):
+        return {
+            "id": str(entry.get("id", normalized_id)),
+            "name": str(entry.get("name", "")),
+            "start_time": entry.get("start_time", ""),
+            "end_time": entry.get("end_time", ""),
+            "target_total": int(entry.get("target_total", 0)),
+            "status": "COMPLETED",
+        }
+
+    return None
 
 
 def save_campaign(campaign: dict[str, Any]) -> None:
@@ -420,6 +451,116 @@ def latest_timeseries_window(
                 break
 
     return list(window)
+
+
+def get_completed_campaigns() -> dict[str, Any]:
+    """Read all completed campaign entries from campaigns.json."""
+    data = _read_json(_completed_campaigns_file, {})
+    return data if isinstance(data, dict) else {}
+
+
+def is_campaign_active(campaign_id: str | int) -> bool:
+    """Return True if the campaign folder still exists in the active campaigns directory."""
+    try:
+        normalized_id = _normalize_campaign_id(campaign_id)
+    except HTTPException:
+        return False
+    return (_campaigns_root / normalized_id).exists()
+
+
+def archive_campaign(campaign_id: str | int) -> bool:
+    """
+    Archive a completed campaign:
+    1. Read the last CSV row for the final snapshot.
+    2. Save metadata + snapshot to storage/campaigns.json.
+    3. Move the campaign folder from campaigns/ to past_campaigns/.
+    Returns True if archived, False if folder was already gone or metadata missing.
+    """
+    normalized_id = _normalize_campaign_id(campaign_id)
+    campaign_folder = _campaigns_root / normalized_id
+
+    if not campaign_folder.exists():
+        return False
+
+    meta_path = campaign_folder / f"{normalized_id}.json"
+    if not meta_path.exists():
+        return False
+
+    campaign = _read_json(meta_path, {})
+    if not campaign:
+        return False
+
+    # Read the last row from CSV for the final snapshot
+    csv_path = campaign_folder / f"{normalized_id}.csv"
+    final_snapshot: dict[str, Any] = {}
+
+    if csv_path.exists():
+        last_row: dict[str, str] | None = None
+        last_fieldnames: list[str] = []
+        with csv_path.open("r", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            last_fieldnames = list(reader.fieldnames or [])
+            for row in reader:
+                last_row = dict(row)
+
+        if last_row:
+            is_legacy = last_fieldnames == LEGACY_CSV_HEADERS
+            if is_legacy:
+                connected = int(last_row.get("Completed", 0))
+                total = int(last_row.get("Total", 0))
+                not_connected = max(total - connected, 0)
+            else:
+                connected = int(last_row.get("connected", 0))
+                not_connected = int(last_row.get("notconnected", 0))
+
+            total_uploads = connected + not_connected
+            percentage = round((connected / total_uploads * 100) if total_uploads > 0 else 0.0, 2)
+
+            raw_time = last_row.get("time", "")
+            try:
+                ts = datetime.strptime(raw_time, CSV_TIME_FORMAT).replace(tzinfo=timezone.utc)
+                timestamp_iso = _serialize_dt(ts)
+            except ValueError:
+                timestamp_iso = raw_time
+
+            final_snapshot = {
+                "campaign_id": normalized_id,
+                "timestamp": timestamp_iso,
+                "total_uploads": total_uploads,
+                "connected": connected,
+                "not_connected": not_connected,
+                "percentage": percentage,
+            }
+
+    with _io_lock:
+        # Re-check under lock (guard against concurrent calls)
+        if not campaign_folder.exists():
+            return False
+
+        # Save to campaigns.json
+        existing = _read_json(_completed_campaigns_file, {})
+        if not isinstance(existing, dict):
+            existing = {}
+
+        existing[normalized_id] = {
+            "id": normalized_id,
+            "name": campaign.get("name", ""),
+            "start_time": campaign.get("start_time", ""),
+            "end_time": campaign.get("end_time", ""),
+            "target_total": int(campaign.get("target_total", 0)),
+            "status": "COMPLETED",
+            "snapshot": final_snapshot,
+        }
+        _write_json(_completed_campaigns_file, existing)
+
+        # Move folder to past_campaigns/
+        _past_campaigns_root.mkdir(parents=True, exist_ok=True)
+        past_folder = _past_campaigns_root / normalized_id
+        if past_folder.exists():
+            shutil.rmtree(str(past_folder))
+        shutil.move(str(campaign_folder), str(past_folder))
+
+    return True
 
 
 def get_admin_accounts() -> list[dict[str, str]]:
