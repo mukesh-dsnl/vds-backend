@@ -1,0 +1,19 @@
+.venv/
+.agents/
+.env
+# Python
+.venv/
+__pycache__/
+
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Custom
+.agents/
+**/md/
+
+/VDS/
+
+/storage/
