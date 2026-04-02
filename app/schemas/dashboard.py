@@ -18,6 +18,25 @@ class LiveStatsResponse(BaseModel):
         from_attributes = True
 
 
+class ArchivedCampaignResponse(BaseModel):
+    """Response for a completed/archived campaign with its final snapshot."""
+
+    campaign_id: str
+    name: str
+    start_time: datetime
+    end_time: datetime
+    target_total: int
+    timestamp: datetime   # time of the final snapshot row
+    total_uploads: int
+    connected: int
+    not_connected: int
+    percentage: float
+    status: str = "COMPLETED"
+
+    class Config:
+        from_attributes = True
+
+
 class CampaignSummaryResponse(BaseModel):
     """Lightweight campaign info response without config details."""
 

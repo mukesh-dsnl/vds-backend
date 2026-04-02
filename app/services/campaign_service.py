@@ -11,8 +11,10 @@ from app.core.storage import (
     campaign_timeseries_exists,
     campaign_time_bounds,
     get_campaign as storage_get_campaign,
+    is_campaign_active,
     list_campaign_ids as storage_list_campaign_ids,
     list_campaigns as storage_list_campaigns,
+    list_completed_campaigns as storage_list_completed,
     save_campaign,
 )
 from app.models.campaign import CampaignStatus
@@ -34,6 +36,13 @@ try:
     _default_tz = ZoneInfo(getattr(_settings, "DEFAULT_TIMEZONE", "UTC"))
 except Exception:
     _default_tz = timezone.utc
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _as_ist(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_default_tz)
+    return dt.astimezone(_IST)
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -43,7 +52,8 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 def _serialize_dt(dt: datetime) -> str:
-    return _as_utc(dt).isoformat()
+    """Serialise a datetime as IST (+05:30) ISO-8601 string."""
+    return _as_ist(dt).isoformat()
 
 
 def _parse_iso_dt(raw: str) -> datetime:
@@ -210,3 +220,24 @@ def archive_completed_campaigns(now: datetime | None = None) -> list[str]:
             logger.exception("Failed to check/archive campaign %s", campaign_id)
 
     return archived
+
+
+def list_active_campaigns() -> list[dict[str, Any]]:
+    """Return only campaigns whose folder still exists in storage/campaigns/ (not archived)."""
+    campaigns: list[dict[str, Any]] = []
+    for campaign_id in storage_list_campaign_ids():
+        campaign = storage_get_campaign(campaign_id)
+        if campaign:
+            campaigns.append(campaign)
+    campaigns.sort(key=lambda c: str(c.get("id", "")).lower(), reverse=True)
+    return campaigns
+
+
+def list_completed_campaigns(date_filter: str | None = None) -> list[dict[str, Any]]:
+    """
+    Return completed (archived) campaigns from campaigns.json.
+
+    Args:
+        date_filter: Optional ``YYYY-MM-DD`` string to filter by start_time date in IST.
+    """
+    return storage_list_completed(date_filter)

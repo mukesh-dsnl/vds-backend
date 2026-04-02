@@ -24,6 +24,7 @@ try:
     _default_tz = ZoneInfo(getattr(_settings, "DEFAULT_TIMEZONE", "UTC"))
 except Exception:
     _default_tz = timezone.utc
+_IST = ZoneInfo("Asia/Kolkata")
 _storage_root = Path(getattr(_settings, "STORAGE_DIR", "storage")).resolve()
 _campaigns_root = _storage_root / "campaigns"
 _past_campaigns_root = _storage_root / "past_campaigns"
@@ -60,9 +61,10 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def _serialize_dt(value: datetime) -> str:
+    """Serialise a datetime as IST (+05:30) ISO-8601 string."""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc).isoformat()
-    return value.isoformat()
+        value = value.replace(tzinfo=_default_tz)
+    return value.astimezone(_IST).isoformat()
 
 
 def _parse_iso_dt(raw: str) -> datetime:
@@ -457,6 +459,37 @@ def get_completed_campaigns() -> dict[str, Any]:
     """Read all completed campaign entries from campaigns.json."""
     data = _read_json(_completed_campaigns_file, {})
     return data if isinstance(data, dict) else {}
+
+
+def list_completed_campaigns(date_filter: str | None = None) -> list[dict[str, Any]]:
+    """
+    Return completed campaigns from campaigns.json.
+
+    Args:
+        date_filter: Optional date string ``YYYY-MM-DD``.  When provided, only
+            campaigns whose ``start_time`` matches that calendar date **in IST**
+            are returned.
+    """
+    data = get_completed_campaigns()
+    result: list[dict[str, Any]] = []
+
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            continue
+
+        if date_filter:
+            raw_start = entry.get("start_time", "")
+            try:
+                dt = _parse_iso_dt(str(raw_start))           # normalise to UTC
+                ist_date = dt.astimezone(_IST).date().isoformat()
+                if ist_date != date_filter:
+                    continue
+            except Exception:
+                continue
+
+        result.append(entry)
+
+    return result
 
 
 def is_campaign_active(campaign_id: str | int) -> bool:
