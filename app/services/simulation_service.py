@@ -108,6 +108,13 @@ def generate_time_series(campaign_id: str) -> int:
     campaign["status"] = "READY"
     save_campaign(campaign)
 
+    # Refresh consolidate counts now that a new campaign is ready
+    try:
+        from app.services.dashboard_service import get_consolidate_stats
+        get_consolidate_stats()
+    except Exception:
+        pass
+
     logger.info(
         "Campaign %s: simulation complete — %d rows generated", campaign_id, len(rows)
     )

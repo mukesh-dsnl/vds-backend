@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.core.security import require_admin
-from app.core.storage import parse_timeseries_csv, write_timeseries_rows
+from app.core.storage import get_credits, get_consolidate, parse_timeseries_csv, save_credits, write_timeseries_rows
 from app.models.campaign import CampaignStatus
 from app.schemas.campaign import CampaignCreate, CampaignResponse, CampaignUpdate
+from app.schemas.consolidate import ConsolidateResponse
+from app.schemas.credits import CreditsResponse, CreditsUpdate
 from app.schemas.dashboard import LiveStatsResponse
 from app.services import campaign_service, dashboard_service, simulation_service
 
@@ -62,6 +64,11 @@ async def upload_timeseries(campaign_id: str, file: UploadFile = File(...), _use
     write_timeseries_rows(campaign_id, rows)
     campaign_service.update_campaign_status(campaign_id, CampaignStatus.READY)
 
+    try:
+        dashboard_service.get_consolidate_stats()
+    except Exception:
+        pass
+
     return {
         "message": f"CSV uploaded successfully for campaign {campaign_id}",
         "rows_written": len(rows),
@@ -79,3 +86,27 @@ def get_live_stats(campaign_id: str, _user: dict = Depends(require_admin)):
 def get_live_stats_all(_user: dict = Depends(require_admin)):
     stats = dashboard_service.get_all_live_stats()
     return [LiveStatsResponse(**item) for item in stats]
+
+
+@router.get("/credits", response_model=CreditsResponse)
+def get_credits_info(_user: dict = Depends(require_admin)):
+    """Read current credits balance."""
+    return CreditsResponse(**get_credits())
+
+
+@router.put("/credits", response_model=CreditsResponse)
+def update_credits(data: CreditsUpdate, _user: dict = Depends(require_admin)):
+    """Update total and used credits; available_credits is computed automatically."""
+    if data.used_credits > data.total_credits:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail="used_credits cannot exceed total_credits",
+        )
+    return CreditsResponse(**save_credits(data.total_credits, data.used_credits))
+
+
+@router.get("/consolidate", response_model=ConsolidateResponse)
+def get_consolidate_stats(_user: dict = Depends(require_admin)):
+    """Return consolidated campaign counts (total, planned, in_progress, completed)."""
+    return ConsolidateResponse(**dashboard_service.get_consolidate_stats())

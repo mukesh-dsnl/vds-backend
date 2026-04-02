@@ -3,17 +3,20 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from app.core.security import require_client
-from app.schemas.campaign import CampaignResponse
+from app.core.storage import get_credits
+from app.schemas.campaign import CampaignResponse, CampaignSummaryResponse
+from app.schemas.consolidate import ConsolidateResponse
+from app.schemas.credits import CreditsResponse
 from app.schemas.dashboard import ArchivedCampaignResponse, LiveStatsResponse
 from app.services import campaign_service, dashboard_service
 
 router = APIRouter(prefix="/api/client", tags=["Client Dashboard"])
 
 
-@router.get("/campaigns", response_model=list[CampaignResponse])
+@router.get("/campaigns", response_model=list[CampaignSummaryResponse])
 def list_campaigns(_user: dict = Depends(require_client)):
     campaigns = campaign_service.list_campaigns()
-    return [CampaignResponse(**campaign_service.campaign_to_response(item)) for item in campaigns]
+    return [CampaignSummaryResponse(**campaign_service.campaign_to_summary(c)) for c in campaigns]
 
 
 @router.get("/campaigns/live", response_model=list[LiveStatsResponse])
@@ -57,3 +60,15 @@ def get_live_stats(campaign_id: str, _user: dict = Depends(require_client)):
     """
     stats = dashboard_service.get_live_stats(campaign_id)
     return LiveStatsResponse(**stats)
+
+
+@router.get("/credits", response_model=CreditsResponse)
+def get_credits_info(_user: dict = Depends(require_client)):
+    """Return the current credits balance."""
+    return CreditsResponse(**get_credits())
+
+
+@router.get("/consolidate", response_model=ConsolidateResponse)
+def get_consolidate(_user: dict = Depends(require_client)):
+    """Return consolidated campaign counts (total, planned, in_progress, completed)."""
+    return ConsolidateResponse(**dashboard_service.get_consolidate_stats())

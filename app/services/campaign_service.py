@@ -100,8 +100,9 @@ def get_runtime_status_label(campaign: dict[str, Any]) -> str:
             return "COMPLETED"
         if now >= start:
             return "IN_PROGRESS"
+        return "PLANNED"
 
-    return str(campaign.get("status") or CampaignStatus.PLANNED.value)
+    return "PLANNED"
 
 
 def campaign_to_response(campaign: dict[str, Any]) -> dict[str, Any]:

@@ -31,6 +31,8 @@ _past_campaigns_root = _storage_root / "past_campaigns"
 _completed_campaigns_file = _storage_root / "campaigns.json"
 _admin_file = _storage_root / "admin.json"
 _clients_file = _storage_root / "clients.json"
+_credits_file = _storage_root / "credits.json"
+_consolidate_file = _storage_root / "consolidate.json"
 _io_lock = RLock()
 
 
@@ -183,7 +185,62 @@ def ensure_storage_initialized() -> None:
                 },
             )
 
+        if not _credits_file.exists():
+            _write_json(
+                _credits_file,
+                {"total_credits": 0, "used_credits": 0, "available_credits": 0},
+            )
+
+        if not _consolidate_file.exists():
+            _write_json(
+                _consolidate_file,
+                {"total": 0, "planned": 0, "in_progress": 0, "completed": 0, "last_updated": None},
+            )
+
         _seed_test_campaign()
+
+
+def get_credits() -> dict[str, Any]:
+    """Read credits from storage/credits.json."""
+    data = _read_json(_credits_file, {"total_credits": 0, "used_credits": 0, "available_credits": 0})
+    return {
+        "total_credits": int(data.get("total_credits", 0)),
+        "used_credits": int(data.get("used_credits", 0)),
+        "available_credits": int(data.get("available_credits", 0)),
+    }
+
+
+def save_credits(total_credits: int, used_credits: int) -> dict[str, Any]:
+    """Persist credits and recompute available_credits."""
+    available = max(total_credits - used_credits, 0)
+    payload = {
+        "total_credits": total_credits,
+        "used_credits": used_credits,
+        "available_credits": available,
+    }
+    with _io_lock:
+        _write_json(_credits_file, payload)
+    return payload
+
+
+def get_consolidate() -> dict[str, Any]:
+    """Read consolidate stats from storage/consolidate.json."""
+    default = {"total": 0, "planned": 0, "in_progress": 0, "completed": 0, "last_updated": None}
+    return _read_json(_consolidate_file, default)
+
+
+def save_consolidate(total: int, planned: int, in_progress: int, completed: int) -> dict[str, Any]:
+    """Persist consolidate campaign counts."""
+    payload = {
+        "total": total,
+        "planned": planned,
+        "in_progress": in_progress,
+        "completed": completed,
+        "last_updated": _serialize_dt(datetime.now(timezone.utc)),
+    }
+    with _io_lock:
+        _write_json(_consolidate_file, payload)
+    return payload
 
 
 def list_campaign_ids() -> list[str]:
