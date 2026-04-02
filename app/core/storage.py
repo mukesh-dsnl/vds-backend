@@ -285,7 +285,7 @@ def parse_timeseries_csv(csv_text: str) -> list[dict[str, Any]]:
             raise HTTPException(status_code=400, detail=f"Row {line_idx}: time is required")
 
         try:
-            parsed_time = datetime.strptime(raw_time, CSV_TIME_FORMAT).replace(tzinfo=timezone.utc)
+            parsed_time = datetime.strptime(raw_time, CSV_TIME_FORMAT).replace(tzinfo=_IST)
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
@@ -335,11 +335,11 @@ def write_timeseries_rows(campaign_id: str | int, rows: list[dict[str, Any]]) ->
             for row in rows:
                 dt_value = row["time"]
                 if isinstance(dt_value, str):
-                    dt_obj = datetime.strptime(dt_value, CSV_TIME_FORMAT).replace(tzinfo=timezone.utc)
+                    dt_obj = datetime.strptime(dt_value, CSV_TIME_FORMAT).replace(tzinfo=_IST)
                 else:
                     dt_obj = dt_value
                 if dt_obj.tzinfo is None:
-                    dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                    dt_obj = dt_obj.replace(tzinfo=_IST)
 
                 if "connected" in row or "notconnected" in row or "not_connected" in row:
                     connected = int(row.get("connected", 0))
@@ -356,7 +356,7 @@ def write_timeseries_rows(campaign_id: str | int, rows: list[dict[str, Any]]) ->
 
                 writer.writerow(
                     [
-                        dt_obj.astimezone(timezone.utc).strftime(CSV_TIME_FORMAT),
+                        dt_obj.astimezone(_IST).strftime(CSV_TIME_FORMAT),
                         connected,
                         not_connected,
                     ]
@@ -386,7 +386,9 @@ def latest_timeseries_row(campaign_id: str | int, at_time: datetime) -> dict[str
         is_legacy = reader.fieldnames == LEGACY_CSV_HEADERS
 
         for row in reader:
-            timestamp = datetime.strptime(row["time"], CSV_TIME_FORMAT).replace(tzinfo=timezone.utc)
+            if not (row.get("time") or "").strip():
+                continue
+            timestamp = datetime.strptime(row["time"].strip(), CSV_TIME_FORMAT).replace(tzinfo=_IST)
             if timestamp <= at_time:
                 if is_legacy:
                     connected = int(row["Completed"])
@@ -433,7 +435,9 @@ def latest_timeseries_window(
         is_legacy = reader.fieldnames == LEGACY_CSV_HEADERS
 
         for row in reader:
-            timestamp = datetime.strptime(row["time"], CSV_TIME_FORMAT).replace(tzinfo=timezone.utc)
+            if not (row.get("time") or "").strip():
+                continue
+            timestamp = datetime.strptime(row["time"].strip(), CSV_TIME_FORMAT).replace(tzinfo=_IST)
             if timestamp <= at_time:
                 if is_legacy:
                     connected = int(row["Completed"])
@@ -534,6 +538,8 @@ def archive_campaign(campaign_id: str | int) -> bool:
             reader = csv.DictReader(handle)
             last_fieldnames = list(reader.fieldnames or [])
             for row in reader:
+                if not (row.get("time") or "").strip():
+                    continue
                 last_row = dict(row)
 
         if last_row:
@@ -551,7 +557,7 @@ def archive_campaign(campaign_id: str | int) -> bool:
 
             raw_time = last_row.get("time", "")
             try:
-                ts = datetime.strptime(raw_time, CSV_TIME_FORMAT).replace(tzinfo=timezone.utc)
+                ts = datetime.strptime(raw_time, CSV_TIME_FORMAT).replace(tzinfo=_IST)
                 timestamp_iso = _serialize_dt(ts)
             except ValueError:
                 timestamp_iso = raw_time

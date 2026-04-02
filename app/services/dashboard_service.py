@@ -60,12 +60,20 @@ def get_all_live_stats() -> list[dict[str, Any]]:
 
 
 def get_live_only_stats() -> list[dict[str, Any]]:
-    """Return live snapshot for every campaign currently in storage/campaigns/ (not archived)."""
+    """Return live snapshot for campaigns that are currently IN_PROGRESS only."""
     active_campaigns = campaign_service.list_active_campaigns()
     if not active_campaigns:
         return []
 
-    campaign_map = {str(c["id"]): c for c in active_campaigns}
+    # Keep only campaigns whose runtime status is IN_PROGRESS
+    in_progress = [
+        c for c in active_campaigns
+        if campaign_service.get_runtime_status_label(c) == "IN_PROGRESS"
+    ]
+    if not in_progress:
+        return []
+
+    campaign_map = {str(c["id"]): c for c in in_progress}
     snapshots = {
         str(item["campaign_id"]): item
         for item in get_all_live_snapshots()
@@ -74,7 +82,7 @@ def get_live_only_stats() -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
 
     results: list[dict[str, Any]] = []
-    for campaign in active_campaigns:
+    for campaign in in_progress:
         campaign_id = str(campaign["id"])
         snapshot = snapshots.get(campaign_id) or {
             "campaign_id": campaign_id,
